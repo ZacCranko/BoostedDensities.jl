@@ -1,27 +1,16 @@
-
-function normalise!(q::QDensity, rng = ([-10,-10], [10, 10])) 
-    if !isnormalised(q)
-        z, _ = hcubature_v((x,v)-> begin v[:] = exp.(Distributions._logpdf(q, x)) end, rng...)
-        logz      = zeros(length(q.models))
-        logz[end] = log(z)
-        q.logz    = logz
-        return q
-    end
-    return q
-end
-
-function kl(p::Distribution, q::Distribution, p_samps = nothing, q_samps = nothing; rng = ([-10,-10], [10, 10]))::Float64
+function kl(p::Distribution, q::Distribution, p_samps = nothing, q_samps = nothing; rng = (fill(-18, dim(p)), fill(18, dim(p))), abstol = 1e-3)::Float64
     if !isnormalised(q)
         normalise!(q)
     end
     f = function (x,v) 
-        v[:] = pdf(p, x) .* (logpdf(p, x) - logpdf(q, x))
+        pdf_p = pdf(p, x) 
+        v[:]  = pdf_p .* logpdf(p, x) - pdf_p .* logpdf(q, x)
     end
-    kl, _ = hcubature_v(f, rng...)
+    kl, _ = hcubature_v(f, rng..., abstol = abstol)
     return kl
 end
 
-integrate_pdf(p::Distribution; rng = ([-10,-10], [10, 10])) = hcubature_v((x,v)-> begin v[:] = pdf(p, x) end, rng...)[1]
+integrate_pdf(p::Distribution; rng = (fill(-30, dim(p)), fill(30, dim(p))), abstol = 1e-3) = hcubature_v((x,v)-> begin v[:] = pdf(p, x) end, rng..., abstol = abstol)[1]
 
 function coverage(p, q, p_samps, q_samps; κ = 0.95, n = 1000)::Float64
     if !isnormalised(q)
@@ -34,9 +23,12 @@ function coverage(p, q, p_samps, q_samps; κ = 0.95, n = 1000)::Float64
     return mean(logpdf(q, p_samps) .> logt)
 end
 
-function expected_log_likelihood(p, q, p_samps, q_samps)::Float64
+
+function nll(q::Distribution, p_samps)::Float64
     if !isnormalised(q)
         normalise!(q)
     end
     return -mean(logpdf(q, p_samps))
 end
+
+nll(p::Distribution, q::Distribution, p_samps, q_samps) = nll(q, p_samps)

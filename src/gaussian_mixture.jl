@@ -11,9 +11,11 @@ function GaussianMixture(;n::Int = 8, r::Real = 4, σ::Real = 1/2)
     return GaussianMixture(cmp)
 end
 
+Distributions.dim(gm::GaussianMixture) = length(gm.cmp[1])
+
 Base.length(gm::GaussianMixture) = length(gm.cmp |> first)
 
-Base.rand(gm::GaussianMixture, n::Int) = rand!(gm, Array{Float64}(2, n))
+Base.rand(gm::GaussianMixture, n::Int) = rand!(gm, Array{Float64}(dim(gm), n))
 
 function Base.rand!(gm::GaussianMixture, samples::AbstractArray{<:Real, 2})
     n = size(samples, 2)
@@ -25,7 +27,7 @@ function Base.rand!(gm::GaussianMixture, samples::AbstractArray{<:Real, 2})
 end
 
 Base.rand(gm::GaussianMixture) = rand(gm.cmp[rand(Categorical(gm.w))])
-Base.mean(p::GaussianMixture) = hcat((mean(c) for c in p.cmp)...)
+Base.mean(p::GaussianMixture)  = hcat((mean(c) for c in p.cmp)...)
 
 Distributions.pdf(gm::GaussianMixture, x::Vector) = sum(w .* pdf(p, x) for (p,w) in zip(gm.cmp,gm.w))
 Distributions.pdf(gm::GaussianMixture, x::Matrix) = sum(w .* pdf(p, x) for (p,w) in zip(gm.cmp,gm.w), dim = 2)

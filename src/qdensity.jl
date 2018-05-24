@@ -2,21 +2,42 @@ mutable struct QDensity <: ContinuousMultivariateDistribution
     q0::ContinuousMultivariateDistribution
     models::Vector{Flux.Chain}
     alphas::Vector{Float64}
-    logz::Vector{Float64}
+    logz::Float64
+    normalised::Bool
 end
 
-isnormalised(q::QDensity) = length(q.models) == 0 || (length(q.models) == length(q.logz) > 0 && last(q.logz) != 0) # U G L Y
-isuntrained(q::QDensity)  = length(q.models) == 0
+QDensity(q0::ContinuousMultivariateDistribution) = QDensity(q0, Vector{Flux.Chain}(), Vector{Float64}(), zero(Float64), true)
+QDensity(n::Int) = QDensity(MvNormal(n, 1))
+
+Distributions.dim(q) = length(q.q0)
+
+isuntrained(q::QDensity)  = (length(q.models) == 0)
+isnormalised(q::QDensity) = q.normalised
+isnormalised(q::Distribution) = true
 
 function Base.show(io::IO, q::QDensity)
     @printf io "%s: \n"     typeof(q) 
     @printf io "t:  %d\n"   length(q.models)
     @printf io "zₜ: %s\n"    exp.(q.logz)
-    @printf io "α:  %s\n"    q.alphas
-    @printf io "Q₀ %s\n"     q.q0
+    @printf io "α:  %s\n"   q.alphas
+    @printf io "Q₀ %s\n"    q.q0
 end
 
 Base.length(q::QDensity) = length(q.q0)
+
+function normalise!(q::QDensity, rng = (fill(-30, dim(q)), fill(30, dim(q))), abstol = 1e-3) 
+    z, _ = hcubature_v((x,v)-> begin v[:] = exp.(Distributions._logpdf(q, x)) end, rng..., abstol = abstol)
+    q.logz = log(z)
+    q.normalised = true
+    return q
+end
+
+function normalise!(q::QDensity, q_samps::Matrix; predicts = vec(Flux.Tracker.data(q.models[end](q_samps)))) 
+    @assert q.normalised == false
+    q.logz += log(mean(x->exp(x)^q.alphas[end], predicts))
+    q.normalised = true
+    return q
+end
 
 function Base.getindex(q::QDensity, ind...)
     if isnormalised(q) 
@@ -28,13 +49,11 @@ end
 
 Base.getindex(q::QDensity, i::Int) = q[Base.OneTo(i)]
 
-QDensity(q0::ContinuousMultivariateDistribution) = QDensity(q0, Vector{Flux.Chain}(), Vector{Float64}(), Vector{Float64}())
-QDensity(n::Int) = QDensity(MvNormal(n, 1))
-
 function Base.push!(q::QDensity, update::Tuple{Flux.Chain, Float64})
     m, α = update
     push!(q.models, m)
     push!(q.alphas, α)
+    q.normalised = false
     return q
 end
 
@@ -45,7 +64,7 @@ function Distributions._logpdf(q::QDensity, x::Matrix)
     end
     return dens
 end
-Distributions._logpdf(q::QDensity, x::Vector) = Distributions._logpdf(q, reshape(x, (2,1)))[1]
+Distributions._logpdf(q::QDensity, x::Vector) = Distributions._logpdf(q, reshape(x, (dim(q),1)))[1]
 
 Distributions.insupport(d::QDensity, x::AbstractVector{T}) where {T<:Real} = true
 function Distributions.logpdf(q::QDensity, x::Matrix)
@@ -55,9 +74,9 @@ function Distributions.logpdf(q::QDensity, x::Matrix)
         warn("Q is not normalised")
         return Distributions._logpdf(q, x)
     end
-    return Distributions._logpdf(q, x) .- last(q.logz)
+    return Distributions._logpdf(q, x) .- q.logz
 end
-Distributions.logpdf(q::QDensity, x::Vector) = logpdf(q, reshape(x, (2,1)))[1]
+Distributions.logpdf(q::QDensity, x::Vector) = logpdf(q, reshape(dim(q), (2,1)))[1]
 Distributions.pdf(q::QDensity, x::Matrix)    = exp.(logpdf(q, x))
 
 logpdf_gradlogpdf(q::AbstractMvNormal, x) = (Distributions._logpdf(q, x),  q.Σ \ ( q.μ .- x))
