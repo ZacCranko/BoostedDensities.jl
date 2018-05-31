@@ -49,7 +49,8 @@ function run_experiment( p::Distribution,
                         seed::Int           = 1337,
                         model::Flux.Chain   = Chain(Dense(2, 10, softplus), Dense(10, 10, softplus),  Dense(10, 2), softmax),
                         folds = 10,
-                        optimise_alpha = false)
+                        optimise_alpha = false,
+                        cubature = false)
     
     p_samps, q_samps, train_p_samps, train_q_samps, test_p_samps, test_q_samps = allocate_train_valid(dim(p), num_p, num_q; train_fraction = 3/4)
     rand!(p, p_samps)
@@ -66,7 +67,8 @@ function run_experiment( p::Distribution,
                             seed = seed,
                             model = model,
                             folds = folds,
-                            optimise_alpha = optimise_alpha)
+                            optimise_alpha = optimise_alpha,
+                            cubature = cubature)
 end
 
 
@@ -84,12 +86,16 @@ function run_experiment(p::Distribution, q0::Distribution, p_samps, q_samps, tra
                         seed::Int           = 1337,
                         model::Flux.Chain   = Chain(Dense(2, 10, softplus), Dense(10, 10, softplus),  Dense(10, 2), softmax),
                         folds = 11,
-                        optimise_alpha = false)
+                        optimise_alpha = false,
+                        cubature = false)
     q = QDensity(q0)
     true_nll         =  nll(p, p_samps)
     verbose && info("True NLL: $true_nll")
     train_history    = Dict{Symbol,  Float64}[]
     boosting_history = Dict{Any,     Float64}[]
+    if !cubature && kl in boosting_metrics
+        warn("Hey watch out, KL needs super crazy good normalisation to not be ridiculous.")
+    end
 
     if run_boosting_metrics
         push!(boosting_history, Dict(met => met(p, q, p_samps, rand(q, size(q_samps, 2))) for met in boosting_metrics))
@@ -162,13 +168,14 @@ function run_experiment(p::Distribution, q0::Distribution, p_samps, q_samps, tra
         
         if optimise_alpha 
             verbose  && info("optimising alpha")
-            α = optimise_alpha!(p, q, Array(p_samps),  Array(q_samps), folds = folds)
+            α = optimise_alpha!(p, q, Array(p_samps),  Array(q_samps), folds = folds, cubature = cubature)
         end
         if verbose  
             info("alpha: $α")
         end
 
         if run_boosting_metrics
+            normalise!(q, q_samps, cubature = cubature)
             push!(boosting_history, Dict(metric => metric(p, q,  p_samps, q_samps) for metric in boosting_metrics))
             boosting_history[end][:true_nll] = true_nll
             if verbose
@@ -183,7 +190,7 @@ function run_experiment(p::Distribution, q0::Distribution, p_samps, q_samps, tra
 end
 
 
-function optimise_alpha!(p::Distribution, q::QDensity, p_samps::Array, q_samps::Array; folds = 10)
+function optimise_alpha!(p::Distribution, q::QDensity, p_samps::Array, q_samps::Array; folds = 10, cubature = false)
     neg_log_likelihood = Vector{Float64}(folds)
     alphas             = linspace(0.0, 1.0, folds)
     logz_prev          = q.logz
@@ -192,13 +199,13 @@ function optimise_alpha!(p::Distribution, q::QDensity, p_samps::Array, q_samps::
         q.normalised  = false
         q.alphas[end] = a
         q.logz        = logz_prev
-        normalise!(q, q_samps, predicts = predicts)
+        normalise!(q, q_samps, predicts = predicts, cubature = cubature)
         neg_log_likelihood[i] = nll(q, p_samps)
     end
     i = findmin(neg_log_likelihood)[2]
     q.alphas[end] = alphas[i]
     q.logz        = logz_prev
     q.normalised  = false
-    normalise!(q, q_samps, predicts = predicts)
+    normalise!(q, q_samps, predicts = predicts, cubature = cubature)
     return alphas[i]
 end

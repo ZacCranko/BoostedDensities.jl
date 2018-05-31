@@ -1,6 +1,8 @@
+# __precompile__()
+
 module BoostedDensities
 
-using Flux, Distributions, Mamba, Cubature, ProgressMeter, KernelDensity
+using Flux, Distributions, Mamba, Cubature, ProgressMeter
 using Base.Iterators: repeated, partition
 using Flux: onehotbatch, argmax, crossentropy, throttle
 using Flux.Tracker

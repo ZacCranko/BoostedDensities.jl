@@ -25,15 +25,18 @@ end
 
 Base.length(q::QDensity) = length(q.q0)
 
-function normalise!(q::QDensity, rng = (fill(-30, dim(q)), fill(30, dim(q))), abstol = 1e-3) 
+function normalise!(q::QDensity, rng = (fill(-20, dim(q)), fill(20, dim(q))), abstol = 1e-3) 
     z, _ = hcubature_v((x,v)-> begin v[:] = exp.(Distributions._logpdf(q, x)) end, rng..., abstol = abstol)
     q.logz = log(z)
     q.normalised = true
     return q
 end
 
-function normalise!(q::QDensity, q_samps::Matrix; predicts = vec(Flux.Tracker.data(q.models[end](q_samps)))) 
-    @assert q.normalised == false
+function normalise!(q::QDensity, q_samps::Matrix; predicts = vec(Flux.Tracker.data(q.models[end](q_samps))), cubature = false) 
+    q.normalised && return q
+    if cubature
+        return normalise!(q)
+    end
     q.logz += log(mean(x->exp(x)^q.alphas[end], predicts))
     q.normalised = true
     return q

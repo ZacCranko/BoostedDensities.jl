@@ -1,50 +1,5 @@
 include(joinpath(Pkg.dir("BoostedDensities"), "experiments", "plotting_commands.jl"))
 
-
-# mean and bounds for kde
-ci([r for r in  kde_results[:kl][1][2][2,:] if !isinf(r)], 0.95)
-ci([r for r in  kde_results[:kl][1][2][2,:] if !isinf(r)], 0.95) |> sum
-ci([r for r in  kde_results[:kl][1][2][2,:] if !isinf(r)], 0.95) |> x -> sum(x .* [1,-1])
-ci([r for r in  kde_results[:kl][2][2] if !isinf(r)], 0.95)
-(ci([r for r in  kde_results[:kl][2][2] if !isinf(r)], 0.95)|> sum, ci([r for r in  kde_results[:kl][2][2] if !isinf(r)], 0.95)|> x -> sum(x .* [1,-1]))
-ci([r for r in  kde_results[:kl][3][2] if !isinf(r)], 0.95)
-(ci([r for r in  kde_results[:kl][3][2] if !isinf(r)], 0.95)|> sum, ci([r for r in  kde_results[:kl][3][2] if !isinf(r)], 0.95)|> x -> sum(x .* [1,-1]))
-
-# exclude any experiments for which kl = Inf
-kde_experiments = Dict()
-for m in (:kl, :nll)
-    kde_experiments[m] = [kde_results[m][i][2][end,:] for i in 1:3]
-    good_ones          = sum(isinf.(kde_experiments[m])) .== 0
-    kde_experiments[m] = [k[good_ones] for k in kde_experiments[m]]
-end
-
-xlim = (0.0, 3.0)
-ylim = (0.0, 2.8)
-exp_name      = "kde_comparison"
-exp_condition = "kl"
-plot_type     = "violin_plot"
-
-x = vcat((fill("$i", length(kde_experiments[:kl][i])) for i in 1:3)...)
-y = vcat((kde_experiments[:kl][i] for i in 1:3)...)
-plt = plot(xlim =xlim, ylim = ylim)
-violin!(plt, x, y, grid = true, framestyle=:grid )
-dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim)
-savefig(plt, dst)
-
-rp, (q, boosting_history, train_history), (k, pk_kl, pk_nll) = kde_comparison_single(3)
-rp, (q, boosting_history, train_history), (k, pk_kl, pk_nll) = result 
-
-function plot_splat(f::Function; plot_range = -15:0.05:+15) 
-    return (plot_range, plot_range, f(hcat(([a,b] for (a,b) in Iterators.product(plot_range, plot_range))...)))
-end
-plot_splat(p::Distribution; plot_range = -15:0.05:+15) = plot_splat(x->pdf(p, x), plot_range = plot_range)
-plot_splat(m::Flux.Chain; plot_range = -15:0.05:+15)   = plot_splat(x->m(x), plot_range = plot_range)
-
-contour(plot_splat(rp)..., xlim = (-6,11),  ylim = (-9,8))
-contour(plot_splat(q)..., xlim = (-6,11),   ylim = (-9,8))
-contour(plot_splat(rp)..., xlim = (-6,11),  ylim = (-9,8))
-
-
 xlim = (1, 8)
 ylim = (0, 1.5)
 exp_name      = "training_error"
@@ -104,6 +59,50 @@ exp_name      = "architecture_comparison"
 exp_condition = "nll"
 plot_type     = "timeseries"
 plt = timeseries_comparison(results["architecture_comparison-2018-05-11T07_43_17.39.jld2"][:nll], xaxis = ("", xlim), yaxis = ("", ylim), error = :ribbon, coeff = -1)
+dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim, ext="pdf")
+savefig(plt, dst)
+
+
+exp_name = "kde_comparison"
+# normalise by true_nll
+
+r = results["kde_comparison-2018-05-29T11_27_10.658.jld2"]
+for i in 1:length(r[:nll])
+    r[:nll][i][2] ./= r[:true_nll][i]
+end
+
+# make extra condition out of 2nd iter
+kde_results = results["kde_comparison-2018-05-29T11_27_10.658.jld2"][:nll][2:end]
+for i in (1,2,3)
+    push!(kde_results, (r[:nll][1][1], r[:nll][1][2][i:i,1:end-1], r[:nll][1][3] * " $i"))
+end
+
+# print summary statistics in a LaTeX friendly way
+foreach(kde_results) do x
+    ind, res, cond = x
+    @assert size(res, 1) == 1
+    t = OneSampleTTest(res |> vec)
+    ci = confint(t)
+    @printf "%s \& %.4f \& %.4f \& %.4f \\\\\n" cond t.xbar ci[1] ci[2]
+end
+
+# violin plots
+xlim = (1,10)
+ylim = (0,2)
+x = vcat((fill(c, length(d)) for (i,d,c) in kde_results)...)
+y = vcat((d[:] for (i,d,c) in kde_results)...)
+# plt = plot(xlim=xlim, ylim=ylim)
+plt = violin(x, y, grid=true, framestyle=:grid)
+exp_name      = "kde_comparison"
+exp_condition = "nll"
+plot_type     = "violin"
+dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim, ext="pdf")
+savefig(plt,dst)
+
+
+xlim = (1,2)
+ylim = (0,5)
+timeseries_comparison(r[:nll][1:1], xaxis = ("", xlim), yaxis = ("", ylim), error = :ribbon)
 dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim, ext="pdf")
 savefig(plt, dst)
 
