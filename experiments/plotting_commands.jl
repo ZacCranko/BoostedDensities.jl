@@ -1,9 +1,5 @@
 using Revise; Revise.track(@__FILE__)
 
-using BoostedDensities, Distributions, Flux, HypothesisTests, JLD2, FileIO
-using Plots, StatPlots, HypothesisTests, Distributions; gr()
-global RESULTSDIR  = joinpath(Pkg.dir("BoostedDensities"), "results")
-
 function plot_splat(f::Function; plot_range = -15:0.05:+15) 
     return (plot_range, plot_range, f(hcat(([a,b] for (a,b) in Iterators.product(plot_range, plot_range))...)))
 end
@@ -108,7 +104,6 @@ function process_experiment(experiment)
     return preprocess_output(results)
 end
 
-experiment = "kde_comparison-2018-05-29T11_27_10.658.jld2"
 function process_kde_experiment(experiment)
     loaded = FileIO.load(joinpath(RESULTSDIR, experiment))
     pre_processed = Dict{Symbol, Any}()
@@ -122,20 +117,4 @@ function process_kde_experiment(experiment)
     end
     pre_processed[:true_nll] = cat(2, (getindex.(data[3,1,i][1], :true_nll) for i in 1:size(data,3))...)
     return pre_processed
-end
-
-
-results = Dict() 
-for experiment in [exprmt for exprmt in readdir(RESULTSDIR) if endswith(exprmt, "jld2")]
-    info("Loading $experiment")
-    results[experiment] = try
-        if startswith(experiment, "kde")
-            process_kde_experiment(experiment)
-        else
-            process_experiment(experiment)
-        end
-    catch e 
-        warn(e)
-        return nothing
-    end
 end
