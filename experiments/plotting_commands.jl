@@ -107,7 +107,6 @@ function process_experiment(experiment)
     return preprocess_output(results)
 end
 
-experiment = "kde_comparison-2018-05-29T11_27_10.658.jld2"
 function process_kde_experiment(experiment)
     loaded = FileIO.load(joinpath(RESULTSDIR, experiment))
     pre_processed = Dict{Symbol, Any}()
