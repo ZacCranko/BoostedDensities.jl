@@ -1,4 +1,23 @@
+using Revise
+using BoostedDensities, Distributions, Flux, HypothesisTests, JLD2, FileIO, NPZ
+using Plots, StatPlots, HypothesisTests, Distributions; gr()
+global RESULTSDIR  = joinpath("/mnt/capybara-ev/.julia/v0.6/BoostedDensities", "results")
 include(joinpath(Pkg.dir("BoostedDensities"), "experiments", "plotting_commands.jl"))
+
+results = Dict() 
+for experiment in [exprmt for exprmt in readdir(RESULTSDIR) if endswith(exprmt, "jld2")]
+    info("Loading $experiment")
+    results[experiment] = try
+        if startswith(experiment, "kde")
+            process_kde_experiment(experiment)
+        else
+            process_experiment(experiment)
+        end
+    catch e 
+        warn(e)
+        return nothing
+    end
+end
 
 xlim = (1, 8)
 ylim = (0, 1.5)
@@ -77,28 +96,33 @@ for i in (1,2,3)
     push!(kde_results, (r[:nll][1][1], r[:nll][1][2][i:i,1:end-1], r[:nll][1][3] * " $i"))
 end
 
+# order by mean nll
+sort!(kde_results, by = x -> abs(1- mean(x[2])), rev=true)
+
 # print summary statistics in a LaTeX friendly way
 foreach(kde_results) do x
     ind, res, cond = x
     @assert size(res, 1) == 1
-    t = OneSampleTTest(res |> vec)
-    ci = confint(t)
-    @printf "%s \& %.4f \& %.4f \& %.4f \\\\\n" cond t.xbar ci[1] ci[2]
+    xbar, err = ci(res |> vec, 0.05)
+    @printf "%s \& %.4f \\pm %.4f \\\\\n" cond xbar err
 end
 
 # violin plots
-xlim = (1,10)
+xlim = (0,9)
 ylim = (0,2)
-x = vcat((fill(c, length(d)) for (i,d,c) in kde_results)...)
+x = vcat((fill(string(ind, c), length(d)) for (ind, (i,d,c)) in enumerate(kde_results))...)
 y = vcat((d[:] for (i,d,c) in kde_results)...)
 # plt = plot(xlim=xlim, ylim=ylim)
-plt = violin(x, y, grid=true, framestyle=:grid)
-exp_name      = "kde_comparison"
+plt = violin(x, y, ylim =ylim, xlim = xlim)
 exp_condition = "nll"
 plot_type     = "violin"
 dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim, ext="pdf")
 savefig(plt,dst)
 
+plt = boxplot(x, y, ylim =ylim, xlim = xlim)
+plot_type     = "box"
+dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim, ext="pdf")
+savefig(plt,dst)
 
 xlim = (1,2)
 ylim = (0,5)
@@ -108,45 +132,72 @@ savefig(plt, dst)
 
 
 
-results_dir    = joinpath(Pkg.dir("BoostedDensities"), "adagan_results")
-adagan_results = sort(readdir(results_dir)) # make sure sorted so line up samples and parameters
-adagan_p_distributions = map(f for f in adagan_results if ismatch(r"real_data_params_mean_[0-9]{2}_var_[0-9].[0-9]{2}.npy", f)) do f
-    means = npzread(joinpath(results_dir, f))
-    var   = match(r".*_var_([0-9].[0-9]{2}).npy", f).captures |> first |> parse
+ada_results_dir    = joinpath(RESULTSDIR, "..", "adagan_results")
+adagan_results = sort(readdir(ada_results_dir)) # make sure sorted so line up samples and parameters
+f = "adagan_comparison-2018-06-06T12_21_26.443.jld2"
+adagan_p_distributions = map(f for f in adagan_results if ismatch(r"real_data_params_mean_[0-9]{2}_var_[0-9].[0-9]{6}.npy", f)) do f
+    means = npzread(joinpath(ada_results_dir, f))
+    var   = match(r".*_var_([0-9].[0-9]{6}).npy", f).captures |> first |> parse
     GaussianMixture(vec(mapslices(means, 2) do mu; MvNormal(mu, sqrt(var)) end))
 end    
 
-ada_true_nll = results["adagan_comparison-2018-05-18T18_09_38.216.jld2"][:true_nll][1]
-ada_nll = - npzread(joinpath(results_dir, "likelihood.npy")) ./ ada_true_nll'
-push!(results["adagan_comparison-2018-05-18T18_09_38.216.jld2"][:nll], 
+ada_true_nll = results[f][:true_nll][1][2][1:1,:]
+
+for r in results[f][:nll]
+    r[2] ./= ada_true_nll 
+end
+
+ada_nll = - npzread(joinpath(ada_results_dir, "likelihood.npy")) ./ ada_true_nll
+push!(results[f][:nll], 
     (2:11, ada_nll, "adagan_adagan")
 )
 
-ada_c  = npzread(joinpath(results_dir, "coverage.npy"))
-push!(results["adagan_comparison-2018-05-18T18_09_38.216.jld2"][:coverage], 
+ada_c  = npzread(joinpath(ada_results_dir, "coverage.npy"))
+push!(results[f][:coverage], 
     (2:11, ada_c, "adagan_adagan")
 )
-
-# remove weird run where we got -ve values for nll
-z = (results["adagan_comparison-2018-05-18T18_09_38.216.jld2"][:nll][1][1], 
-results["adagan_comparison-2018-05-18T18_09_38.216.jld2"][:nll][1][2][:,[1,2,3,4,5,6,7,8,9,10,11,13,14,15]],
-results["adagan_comparison-2018-05-18T18_09_38.216.jld2"][:nll][1][3])
 
 exp_name      = "adagan_comparison"
 exp_condition = "nll"
 plot_type     = "timeseries"
 xlim = (0, 11)
-ylim = (0.0, 1.5)
-plt = timeseries_comparison(z, xaxis = ("", xlim), yaxis = ("", ylim), error = :ribbon)
+ylim = (-20, 60)
+plt = timeseries_comparison(results[f][:nll], xaxis = ("", xlim), yaxis = ("", ylim), error = :ribbon)
 dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim)
 savefig(plt, dst)
 
-2
 exp_name      = "adagan_comparison"
 exp_condition = "coverage"
 plot_type     = "timeseries"
 xlim = (0, 11)
 ylim = (0.1, 1.5)
-plt = timeseries_comparison(results["adagan_comparison-2018-05-18T18_09_38.216.jld2"][:coverage],  xaxis = ("", xlim), yaxis = ("", ylim), error = :ribbon)
+plt = timeseries_comparison(results[f][:coverage],  xaxis = ("", xlim), yaxis = ("", ylim), error = :ribbon)
+dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim)
+savefig(plt, dst)
+
+
+# f = "dimensionality_experiment-2018-06-06T14_43_26.405.jld2"
+# f = "dimensionality_experiment-2018-06-06T15_42_00.271.jld2"
+f = "dimensionality_experiment-2018-06-06T16_03_54.514.jld2"
+results[f]
+for (r,tnll) in zip(results[f][:nll], results[f][:true_nll])
+    r[2] ./= tnll[2][1:1,:]
+end
+
+exp_name = "dimensionality_experiment"
+
+condition = "nll"
+plot_type = "timeseries"
+xlim = (0, 12)
+ylim = (-1, 3)
+plt = timeseries_comparison(results[f][:nll],  xaxis = ("", xlim), yaxis = ("", ylim), error = :ribbon)
+dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim)
+savefig(plt, dst)
+
+condition = "nll"
+plot_type = "timeseries"
+xlim = (0, 12)
+ylim = (-1, 3)
+plt = timeseries_comparison(results[f][:nll],  xaxis = ("", xlim), yaxis = ("", ylim), error = :ribbon)
 dst = plot_destination(exp_name, exp_condition, plot_type, xlim, ylim)
 savefig(plt, dst)

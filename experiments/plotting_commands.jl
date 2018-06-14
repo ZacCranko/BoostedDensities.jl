@@ -1,17 +1,13 @@
 using Revise; Revise.track(@__FILE__)
 
-using BoostedDensities, Distributions, Flux, HypothesisTests, JLD2, FileIO
-using Plots, StatPlots, HypothesisTests, Distributions; gr()
-global RESULTSDIR  = joinpath(Pkg.dir("BoostedDensities"), "results")
-
 function plot_splat(f::Function; plot_range = -15:0.05:+15) 
     return (plot_range, plot_range, f(hcat(([a,b] for (a,b) in Iterators.product(plot_range, plot_range))...)))
 end
 plot_splat(p::Distribution; plot_range = -15:0.05:+15) = plot_splat(x->pdf(p, x), plot_range = plot_range)
-plot_splat(m::Flux.Chain; plot_range = -15:0.05:+15)   = plot_splat(x->m(x), plot_range = plot_range)
+plot_splat(m::Flux.Chain;   plot_range = -15:0.05:+15) = plot_splat(x->m(x),      plot_range = plot_range)
 
 upscale = 1 #8x upscaling in resolution
-default(size=(800*upscale,600*upscale)) # Plot canvas size
+default(size=(800*upscale, 600*upscale)) # Plot canvas size
 
 default(legend = false, 
         grid = true, 
@@ -80,19 +76,22 @@ function preprocess_output(data, conds)
     try
         pre_processed[:kl]  = [(boostinds, cat(2, (getindex.(data[3,j,i], kl)  for i in 1:size(data,3))...), c) for (j,c) in enumerate(conds)]
     end
-    pre_processed[:nll] = [(boostinds, cat(2, (getindex.(data[3,j,i], nll) for i in 1:size(data,3))...), c) for (j,c) in enumerate(conds)]
+    pre_processed[:nll]     = [(boostinds, cat(2, (getindex.(data[3,j,i], nll) for i in 1:size(data,3))...), c) for (j,c) in enumerate(conds)]
     try
         pre_processed[:coverage] = [(boostinds, cat(2, (getindex.(data[3,j,i], coverage) for i in 1:size(data,3))...), c) for (j,c) in enumerate(conds)]
     end
     if size(data, 1) == 4
         pre_processed[:true_nll] = [[data[4,j,i] for i in 1:size(data,3) ] for (j,c) in enumerate(conds)]
+    else
+        pre_processed[:true_nll]  = [(boostinds, cat(2, (getindex.(data[3,j,i], :true_nll)  for i in 1:size(data,3))...), c) for (j,c) in enumerate(conds)]
     end
-    # @show typeof(data[2,1,1])
+    @show typeof(data[2,1,1])
+    @show keys(data[2,1,1][1])
     traininds = inds(getindex.(data[2,1,1], :iter))
     for m in keys(data[2,1,1][1])
         try
             pre_processed[m] = [
-                (traininds, cat(2, (getindex.(data[2,j,i], m) for i in 1:size(data,3))...), c) 
+                (traininds, getindex.(data[2,j,i], m) for i in 1:size(data,3), c) 
                 for (j,c) in enumerate(conds)]
         end
     end
@@ -122,20 +121,4 @@ function process_kde_experiment(experiment)
     end
     pre_processed[:true_nll] = cat(2, (getindex.(data[3,1,i][1], :true_nll) for i in 1:size(data,3))...)
     return pre_processed
-end
-
-
-results = Dict() 
-for experiment in [exprmt for exprmt in readdir(RESULTSDIR) if endswith(exprmt, "jld2")]
-    info("Loading $experiment")
-    results[experiment] = try
-        if startswith(experiment, "kde")
-            process_kde_experiment(experiment)
-        else
-            process_experiment(experiment)
-        end
-    catch e 
-        warn(e)
-        return nothing
-    end
 end

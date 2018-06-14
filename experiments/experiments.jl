@@ -93,7 +93,26 @@ error_plots() = begin
     return results, ["error_plot"]
 end
 
-adagan_comparison() = begin
+@everywhere adagan_worker(adagan_p_distributions, adagan_p_samps)  = begin
+    VERBOSE >= 1 && info("worker $(myid()): adagan comparison")
+    srand(hash(adagan_p_samps[1:10]))
+
+    p_samps, q_samps, train_p_samps, train_q_samps, test_p_samps, test_q_samps = allocate_train_valid(2, 5_000, 5_000; train_fraction = 3/4)
+    p_samps[:] = adagan_p_samps[:, randperm(64_000)[1:1_000]]
+    # Σ  = cov(adagan_p_samps, 2)
+    μ  = mean(adagan_p_samps, 2) |> vec
+    q₀ = MvNormal(μ, std(adagan_p_samps))
+    p  = adagan_p_distributions
+    iter = 10
+    q, train_history, boosting_history = run_experiment(p, q₀, p_samps, q_samps, train_p_samps, train_q_samps, test_p_samps, test_q_samps,
+                                                        model = Chain(Dense(2, 10, Flux.relu), Dense(10, 10, Flux.relu),  Dense(10, 1)), num_epochs = 1_000, 
+                                                        iter = iter,
+                                                        boosting_metrics = (nll, coverage),
+                                                        run_boosting_metrics = true, verbose = VERBOSE >= 3, early_stop = 0.03, optimiser = ADAM, optimise_alpha = true)
+    return [q, train_history, boosting_history]
+end
+
+@everywhere adagan_comparison() = begin
     results_dir    = joinpath(Pkg.dir("BoostedDensities"), "adagan_results")
     adagan_results = sort(readdir(results_dir)) # make sure sorted so line up samples and parameters
 
@@ -101,9 +120,9 @@ adagan_comparison() = begin
         reshape(permutedims(data, (4,3,2,1)), (2, div(length(data),2))) 
     end 
 
-    adagan_p_distributions = map(f for f in adagan_results if ismatch(r"real_data_params_mean_[0-9]{2}_var_[0-9].[0-9]{2}.npy", f)) do f
+    adagan_p_distributions = map(f for f in adagan_results if ismatch(r"real_data_params_mean_[0-9]{2}_var_[0-9].[0-9]{6}.npy", f)) do f
         means = npzread(joinpath(results_dir, f))
-        var   = match(r".*_var_([0-9].[0-9]{2}).npy", f).captures |> first |> parse
+        var   = match(r".*_var_([0-9].[0-9]{6}).npy", f).captures |> first |> parse
         GaussianMixture(vec(mapslices(means, 2) do mu; MvNormal(mu, sqrt(var)) end))
     end    
 
@@ -114,36 +133,13 @@ adagan_comparison() = begin
 
     @assert length(adagan_p_samps) == length(adagan_p_distributions)
 
-    d = 2
+    results = pmap(adagan_worker, adagan_p_distributions, adagan_p_samps)
 
-    iter = 10
-    results = Array{Any}(4, 1, length(adagan_p_samps))
-    for i in Base.OneTo(length(adagan_p_samps))
-        VERBOSE == 1 && info("worker $(myid()): adagan comparison: $i of $RUNS")
-        srand(SEED + i)
-
-        p_samps, q_samps, train_p_samps, train_q_samps, test_p_samps, test_q_samps = allocate_train_valid(2, 5_000, 5_000; train_fraction = 3/4)
-        p_samps[:] = adagan_p_samps[i][:, randperm(64_000)[1:5_000]]
-        Σ  = cov(adagan_p_samps[i], 2)
-        μ  = mean(adagan_p_samps[i], 2) |> vec
-        q₀ = MvNormal(μ, Σ)
-        p = adagan_p_distributions[i]
-
-        true_nll = -mean(logpdf(p, p_samps))
-
-        q, train_history, boosting_history = run_experiment(p, q₀, p_samps, q_samps, train_p_samps, train_q_samps, test_p_samps, test_q_samps,
-                                                            model = Chain(Dense(d, 10, Flux.relu), Dense(10, 10, Flux.relu),  Dense(10, 1)), num_epochs = 2_000, 
-                                                            iter = iter,
-                                                            boosting_metrics = (nll, coverage),
-                                                            run_boosting_metrics = true, verbose = VERBOSE >= 3, early_stop = 0.03, optimiser = ADAM, optimise_alpha = true)
-        results[:,1,i] = [q, train_history, boosting_history, true_nll]
-    end
-        
-    return results, ["adagan_comparison"]
+    return cat(3, results...), ["adagan_comparison"]
 end
 
-@everywhere kde_comparison() = begin
-    d = 2
+@everywhere kde_comparison_cross_validate() = begin
+    d = 4
     conditions = ["deep network"]
     for k in LightKDE.supported_kernels
         push!(conditions, "scott/silverman: $k")
@@ -178,24 +174,51 @@ end
 
         for (j, kernel) in enumerate(LightKDE.supported_kernels)
             VERBOSE >= 3 && info("worker $(myid()): kernel density comparison: $i of $RUNS: scott/silverman: $kernel")
-            k = kde(p_samps, cross_validate = false, kernel = kernel)
-            # pk_kl  = kl(rp, k)
+            k = kde(p_samps, cross_validate = true, kernel = kernel)
             pk_nll = -mean(logpdf(k, p_samps))
             VERBOSE >= 3 && info("worker $(myid()): nll $pk_nll")
-            results[:,1+j,i] = [nothing, nothing, Dict(nll => pk_nll)]
+            results[:,1+j,i] = [nothing, nothing, Dict(nll => pk_nll)] 
         end
-        # VERBOSE >= 2 && info("worker $(myid()): kernel density comparison: $i of $RUNS: cross_validated")
-        # k = kde(p_samps, cross_validate = true, δ = 1.0, folds = 10)
-        # # pk_kl  = kl(rp, k)
-        # pk_nll = -mean(logpdf(k, p_samps))
-        # VERBOSE >= 3 && info("worker $(myid()): nll $pk_nll")
-        # results[:,3,i] = [nothing, nothing, Dict(nll => pk_nll)]
     end
         
     return results, conditions
 end
 
 
+
+
+@everywhere dimensionality_experiment() = begin
+    conditions = [2,4,8]
+
+    m = length(conditions)
+    results = Array{Any}(3, m, RUNS)
+    for i in Base.OneTo(RUNS)
+        VERBOSE == 1 && info("worker $(myid()): dimensionaliy experiment: $i of $RUNS")
+        srand(SEED + i)
+         for (j, d) in enumerate(conditions)
+            num_p, num_q = 1_000, 1_000
+            means    = [rand(MvNormal(d, 4)) for _ in 1:8]
+            sigmas   = fill(1/2, 8)
+            rp       = GaussianMixture(map(MvNormal, means, sigmas)) # randomly arranged Gaussians
+            p_samps, q_samps, train_p_samps, train_q_samps, test_p_samps, test_q_samps = allocate_train_valid(d, num_p, num_q; train_fraction = 3/4)
+            
+            p_samps = rand!(rp, p_samps)
+            Σ  = cov(p_samps, 2)
+            μ  = mean(p_samps, 2) |> vec
+            q₀ = MvNormal(μ, Σ)
+
+            VERBOSE >= 2 && info("worker $(myid()): dimensionality experiment: $i of $RUNS: d = $d")
+            q, train_history, boosting_history = run_experiment(rp, q₀, p_samps, q_samps, train_p_samps, train_q_samps, test_p_samps, test_q_samps,
+                                                                iter = 4, num_epochs = 1_000, batch_size = 100,
+                                                                model = Chain(Dense(d, 10, Flux.relu), Dense(10, 10, Flux.relu),  Dense(10, 1)), 
+                                                                boosting_metrics = (nll,),
+                                                                run_boosting_metrics = true, verbose = VERBOSE >= 3, optimiser = ADAM, alpha = i -> 1/(2i))
+            results[:,j,i] = [q, train_history, boosting_history]
+        end
+    end
+        
+    return results, string.(conditions)
+end
 
 function runall(experiments)
     pmap(experiments) do exprmt
@@ -213,5 +236,5 @@ end
 
 runall(args...) = runall((args...))
 
-testexp() = Array[], String[]
+testexp() = Array[], String[] 
 errorexp() = error("whoops")
